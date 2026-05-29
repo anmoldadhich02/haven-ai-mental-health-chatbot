@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.routes import mood
 from app.routes import chat
 from app.db.database import create_tables
 from fastapi.middleware.cors import CORSMiddleware
