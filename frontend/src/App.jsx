@@ -3,6 +3,7 @@ import React, {
 } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { create } from "zustand";
+import MoodDashboard from "./components/MoodDashboard";
 import { useMutation } from "@tanstack/react-query";
 import axios from "axios";
 import {
@@ -454,7 +455,20 @@ const useStore = create((set, get) => ({
     try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
     return { memories: updated };
   }),
-
+  deleteSession: (id) => {
+  set((s) => {
+    const history = s.history.filter(i => i.id !== id);
+    const sessions = { ...s.sessions };
+    delete sessions[id];
+    const messages = s.activeSession === id ? [] : s.messages;
+    const activeSession = s.activeSession === id ? null : s.activeSession;
+    try {
+      localStorage.setItem("haven-history", JSON.stringify(history));
+      localStorage.setItem("haven-sessions", JSON.stringify(sessions));
+    } catch {}
+    return { history, sessions, messages, activeSession };
+  });
+},
   saveSession: (title) => {
     const today = new Date();
     const dateStr = today.toDateString();
@@ -946,19 +960,50 @@ function MoodBar() {
   const setMood = useStore(s => s.setSelectedMood);
   const [ripple, setRipple] = useState(null);
 
-  const pick = (mood) => {
+  const pick = async (mood) => {
     setMood(mood.key);
     setRipple(mood.key);
     setTimeout(() => setRipple(null), 600);
+
+    try {
+      await api.post("/mood/", {
+        mood: mood.key,
+      });
+    } catch (error) {
+      console.error("Mood save failed:", error);
+    }
   };
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-      <span style={{ color: "var(--muted)", fontSize: 13, marginRight: 4 }}>How are you feeling?</span>
+      <span style={{ color: "var(--muted)", fontSize: 13, marginRight: 4 }}>
+        How are you feeling?
+      </span>
+
       {MOOD_OPTS.map(m => (
-        <button key={m.key} onClick={() => pick(m)} className={`hover-lift ${selected === m.key ? "mood-sel" : ""}`}
-          style={{ position: "relative", overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 7, borderRadius: 999, border: "1px solid var(--border)", background: selected === m.key ? "rgba(90,138,110,0.16)" : "var(--chip)", padding: "7px 14px", fontSize: 13, color: "var(--muted)", cursor: "pointer", fontFamily: "inherit" }}>
-          {ripple === m.key && <span className="mood-ripple" style={{ "--rc": m.color }} />}
+        <button
+          key={m.key}
+          onClick={() => pick(m)}
+          className={`hover-lift ${selected === m.key ? "mood-sel" : ""}`}
+          style={{
+            position: "relative",
+            overflow: "hidden",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            borderRadius: 999,
+            border: "1px solid var(--border)",
+            background: selected === m.key ? "rgba(90,138,110,0.16)" : "var(--chip)",
+            padding: "7px 14px",
+            fontSize: 13,
+            color: "var(--muted)",
+            cursor: "pointer",
+            fontFamily: "inherit"
+          }}
+        >
+          {ripple === m.key && (
+            <span className="mood-ripple" style={{ "--rc": m.color }} />
+          )}
           <span style={{ fontSize: 16 }}>{m.emoji}</span>
           <span>{m.label}</span>
         </button>
@@ -1538,6 +1583,7 @@ function ChatInput({ onSend, disabled }) {
 ═══════════════════════════════════════════════ */
 function TopBar({ intention, messages, onBreathing, onReflect, isPending }) {
   const setActivePanel = useStore(s => s.setActivePanel);
+
   const sessionReflection = useStore(s => s.sessionReflection);
   const hasMessages = messages.length > 0;
 
@@ -1588,7 +1634,7 @@ function Sidebar({ onNew }) {
   const userName = useStore(s => s.userName);
   const totalCheckins = useStore(s => s.totalCheckins);
   const setActivePanel = useStore(s => s.setActivePanel);
-
+  const deleteSession = useStore(s => s.deleteSession);
   // Group history by category
   const grouped = useMemo(() => {
     const groups = { Today: [], Yesterday: [], Earlier: [] };
@@ -1626,11 +1672,19 @@ function Sidebar({ onNew }) {
             {items.map(item => {
               const isAct = active === item.id;
               return (
-                <button key={item.id} onClick={() => setActive(item.id)}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, border: `1px solid ${isAct ? "rgba(90,138,110,0.38)" : "transparent"}`, background: isAct ? "rgba(90,138,110,0.13)" : "transparent", padding: "8px 10px", textAlign: "left", fontSize: 12, cursor: "pointer", color: isAct ? "var(--text)" : "var(--muted)", transition: "all 140ms", fontFamily: "inherit", width: "100%" }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "85%" }}>{item.title}</span>
-                  <ChevronRight size={12} style={{ opacity: 0.3, flexShrink: 0 }} />
-                </button>
+                <div key={item.id}
+  style={{ display: "flex", alignItems: "center", borderRadius: 10, border: `1px solid ${isAct ? "rgba(90,138,110,0.38)" : "transparent"}`, background: isAct ? "rgba(90,138,110,0.13)" : "transparent", transition: "all 140ms", width: "100%", overflow: "hidden" }}
+  onMouseEnter={e => { const btn = e.currentTarget.querySelector(".del-btn"); if(btn) btn.style.opacity = "1"; }}
+  onMouseLeave={e => { const btn = e.currentTarget.querySelector(".del-btn"); if(btn) btn.style.opacity = "0"; }}>
+  <button onClick={() => setActive(item.id)}
+    style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", textAlign: "left", fontSize: 12, cursor: "pointer", color: isAct ? "var(--text)" : "var(--muted)", fontFamily: "inherit", background: "none", border: "none", minWidth: 0 }}>
+    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
+  </button>
+  <button className="del-btn" onClick={(e) => { e.stopPropagation(); deleteSession(item.id); }}
+    style={{ opacity: 0, flexShrink: 0, background: "none", border: "none", color: "var(--muted-2)", cursor: "pointer", padding: "8px 6px", display: "flex", alignItems: "center", transition: "opacity 140ms" }}>
+    <Trash2 size={12} />
+  </button>
+</div>
               );
             })}
           </div>
