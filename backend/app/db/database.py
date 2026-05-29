@@ -41,6 +41,15 @@ def create_tables():
     )
     """)
 
+    # Journals Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS journals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        created_at TEXT
+    )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -191,3 +200,59 @@ def get_moods():
 
     conn.close()
     return rows
+
+
+# =========================
+# JOURNAL FUNCTIONS
+# =========================
+
+def save_journal(content):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT INTO journals
+    (content, created_at)
+    VALUES (?, ?)
+    """, (
+        content,
+        datetime.now().isoformat()
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_journals():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT id,
+           content,
+           created_at
+    FROM journals
+    ORDER BY id DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+    return rows
+
+
+def delete_journal(journal_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM journals WHERE id = ?",
+        (journal_id,)
+    )
+
+    deleted = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return deleted > 0
