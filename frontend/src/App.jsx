@@ -544,7 +544,10 @@ const useStore = create((set, get) => ({
 /* ═══════════════════════════════════════════════
    API
 ═══════════════════════════════════════════════ */
-const api = axios.create({ baseURL: "http://127.0.0.1:8000", headers: { "Content-Type": "application/json" } });
+const api = axios.create({
+  baseURL: "https://haven-w427.onrender.com",
+  headers: { "Content-Type": "application/json" },
+});
 const fetchReply = (msg) => api.post("/chat/", { message: msg }).then(r => r.data);
 
 /* ═══════════════════════════════════════════════
