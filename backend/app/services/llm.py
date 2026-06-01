@@ -134,14 +134,14 @@ def generate_response(user_message: str, chat_history: list = None, memories: li
             model="llama-3.3-70b-versatile",
             messages=messages,
             temperature=0.7,
-            max_completion_tokens=300
+            max_completion_tokens=get_max_tokens(user_message)
         )
 
         return response.choices[0].message.content
 
     except Exception as e:
         print("Groq API Error:", e)
-        return "Sorry, I’m having trouble responding right now. Please try again in a moment."
+        return "Sorry, I'm having trouble responding right now. Please try again in a moment."
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     chat_history = []

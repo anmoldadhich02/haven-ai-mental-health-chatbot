@@ -26,6 +26,7 @@ def chat(request: ChatRequest):
         return {"error": "Message cannot be empty"}
 
     risk_level = detect_risk(user_message)
+
     memory = extract_memory(user_message)
     memory_status = "not_saved"
 
@@ -33,14 +34,12 @@ def chat(request: ChatRequest):
         saved = save_memory(memory)
         memory_status = "saved" if saved else "already_exists"
 
-    if memory:
-        save_memory(memory)
-
     if risk_level == "high":
         safety_reply = (
-            "I'm really sorry you're feeling this way. "
-            "You don't have to face this alone. Please contact someone you trust right now, "
-            "or reach out to emergency services or a mental health helpline in your area."
+            "I'm really sorry you're feeling this way. You don't have to face this alone. "
+            "Please contact someone you trust right now or reach emergency support immediately.\n\n"
+            "India emergency number: 112\n"
+            "AASRA mental health helpline: 9152987821"
         )
 
         save_chat(user_message, safety_reply, risk_level)
@@ -54,13 +53,14 @@ def chat(request: ChatRequest):
         return {
             "user_message": user_message,
             "risk_level": risk_level,
-            "bot_reply": bot_reply,
+            "bot_reply": safety_reply,
             "history_count": len(chat_history),
             "memory_status": memory_status
         }
 
     saved_memories = get_memories()
     memory_texts = [row[1] for row in saved_memories]
+
     bot_reply = generate_response(user_message, chat_history, memory_texts)
 
     save_chat(user_message, bot_reply, risk_level)
@@ -75,15 +75,26 @@ def chat(request: ChatRequest):
         "user_message": user_message,
         "risk_level": risk_level,
         "bot_reply": bot_reply,
-        "history_count": len(chat_history)
+        "history_count": len(chat_history),
+        "memory_status": memory_status
     }
 
 
 @router.get("/history")
 def get_history():
+    chats = get_chats()
+
     return {
-        "total_messages": len(chat_history),
-        "history": chat_history
+        "history": [
+            {
+                "id": row[0],
+                "user_message": row[1],
+                "bot_reply": row[2],
+                "risk_level": row[3],
+                "created_at": row[4]
+            }
+            for row in chats
+        ]
     }
 
 
@@ -91,7 +102,7 @@ def get_history():
 def clear_history():
     chat_history.clear()
     return {
-        "message": "Chat history cleared successfully"
+        "message": "Temporary chat history cleared successfully"
     }
 
 
