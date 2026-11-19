@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import axios from "axios";
 import {
   BarChart,
   Bar,
@@ -9,10 +8,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-
-const api = axios.create({
-  baseURL: "http://127.0.0.1:8000",
-});
+import { api } from "../api";
 
 const moodLabels = {
   happy: "😊 Good",

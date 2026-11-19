@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { create } from "zustand";
 import MoodDashboard from "./components/MoodDashboard";
 import { useMutation } from "@tanstack/react-query";
-import axios from "axios";
+import { api } from "./api";
 import {
   Bot, Menu, Plus, Send, Sparkles, User, Clock3, ChevronRight,
   Heart, Bookmark, Trash2, Edit3, Wind, Moon, Sun, Sunrise,
@@ -544,10 +544,6 @@ const useStore = create((set, get) => ({
 /* ═══════════════════════════════════════════════
    API
 ═══════════════════════════════════════════════ */
-const api = axios.create({
-  baseURL: "https://haven-w427.onrender.com",
-  headers: { "Content-Type": "application/json" },
-});
 const fetchReply = (msg) => api.post("/chat/", { message: msg }).then(r => r.data);
 
 /* ═══════════════════════════════════════════════
@@ -1753,11 +1749,12 @@ export default function App() {
       setTyping(false);
       const reply = data.bot_reply ?? "I'm here with you.";
       addMessage({ id: crypto.randomUUID(), role: "haven", content: reply, timestamp: new Date() });
-      const title = reply.slice(0, 34).trim();
+      const isErrorReply = reply.startsWith("Sorry, I'm having trouble") || reply.startsWith("AI service is not configured") || reply.startsWith("Haven is currently offline");
+      const title = isErrorReply ? "Support session" : reply.slice(0, 34).trim();
       saveSession(title || "New session");
       persistMoodLog();
       // Auto-save memory if notable
-      if (reply.length > 80 && Math.random() < 0.15) {
+      if (!isErrorReply && reply.length > 80 && Math.random() < 0.15) {
         const snippet = reply.split(".")[0].trim();
         if (snippet.length > 20) addMemory(snippet);
       }

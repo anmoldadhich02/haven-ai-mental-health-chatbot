@@ -51,3 +51,21 @@ def health_check():
         "status": "healthy",
         "service": "Haven Mental Health Chatbot API"
     }
+
+
+@app.get("/health/ai")
+def ai_health_check():
+    from app.services.llm import get_groq_api_key, get_groq_client
+    key = get_groq_api_key()
+    if not key:
+        return {"status": "error", "message": "No GROQ_API_KEY configured"}
+    try:
+        c = get_groq_client()
+        models = [m.id for m in c.models.list().data]
+        return {
+            "status": "connected",
+            "key_configured": True,
+            "models_available": models
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

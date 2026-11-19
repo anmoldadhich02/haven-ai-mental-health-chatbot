@@ -1,13 +1,29 @@
 import os
+import traceback
+from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq
 
+# Load .env from backend folder or current working directory
+_backend_env = Path(__file__).resolve().parent.parent.parent / ".env"
+if _backend_env.exists():
+    load_dotenv(dotenv_path=_backend_env)
 load_dotenv()
 
-if not os.getenv("GROQ_API_KEY"):
-    raise ValueError("GROQ_API_KEY not found. Please check your .env file.")
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+def get_groq_api_key():
+    return os.getenv("GROQ_API_KEY") or os.getenv("AI_API_KEY")
+
+
+def get_groq_client():
+    key = get_groq_api_key()
+    if not key:
+        return None
+    return Groq(api_key=key)
+
+
+# Initialize module client if key is available
+client = get_groq_client()
 
 SYSTEM_PROMPT = """
 You are Haven — a warm, emotionally intelligent mental health companion.
@@ -103,12 +119,13 @@ def get_max_tokens(user_message: str) -> int:
     if any(word in message for word in deep_mode_keywords):
         return 1800
 
-    return 350
+    return 500
 
 # ─────────────────────────────────────────
 def generate_response(user_message: str, chat_history: list = None, memories: list = None) -> str:
-    if not os.getenv("GROQ_API_KEY"):
-        return "AI service is not configured. Please check the API key."
+    active_client = get_groq_client() or client
+    if not active_client:
+        return "AI service is not configured. Please check your GROQ_API_KEY."
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT}
@@ -129,19 +146,36 @@ def generate_response(user_message: str, chat_history: list = None, memories: li
 
     messages.append({"role": "user", "content": user_message})
 
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            temperature=0.7,
-            max_completion_tokens=get_max_tokens(user_message)
-        )
+    # Models to try in order of priority (llama-3.3-70b-versatile was deprecated by Groq)
+    candidate_models = []
+    preferred = os.getenv("GROQ_MODEL") or os.getenv("AI_MODEL")
+    if preferred and preferred not in candidate_models:
+        candidate_models.append(preferred)
+    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
 
-        return response.choices[0].message.content
+    last_error = None
+    max_tokens = get_max_tokens(user_message)
 
-    except Exception as e:
-        print("Groq API Error:", e)
-        return "Sorry, I'm having trouble responding right now. Please try again in a moment."
+    for model_name in candidate_models:
+        try:
+            response = active_client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.7,
+                max_completion_tokens=max_tokens
+            )
+            return response.choices[0].message.content
+
+        except Exception as e:
+            last_error = e
+            print(f"[Haven LLM] Groq API Error with model '{model_name}': {e}")
+            continue
+
+    print("[Haven LLM] All candidate models failed. Last error:", last_error)
+    traceback.print_exc()
+    return "Sorry, I'm having trouble responding right now. Please try again in a moment."
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     chat_history = []

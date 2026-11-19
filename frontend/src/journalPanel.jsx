@@ -1,10 +1,6 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
 import { BookOpen, RefreshCw, Trash2 } from "lucide-react";
-
-const api = axios.create({
-  baseURL: "http://127.0.0.1:8000",
-});
+import { api } from "./api";
 
 export default function JournalPanel() {
   const [content, setContent] = useState("");
