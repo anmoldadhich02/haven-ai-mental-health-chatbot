@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { create } from "zustand";
 import MoodDashboard from "./components/MoodDashboard";
 import { useMutation } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import {
   Bot, Menu, Plus, Send, Sparkles, User, Clock3, ChevronRight,
@@ -209,6 +211,7 @@ html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--text);
 .chat-scroll::-webkit-scrollbar-thumb{background:rgba(90,138,110,0.2);border-radius:99px;}
 .sidebar-scroll{flex:1;overflow-y:auto;scrollbar-width:none;}
 .sidebar-scroll::-webkit-scrollbar{display:none;}
+.haven-message-content > *:last-child{margin-bottom:0 !important;}
 
 @keyframes breathe{0%,100%{opacity:0.55;transform:scale(1);}50%{opacity:0.85;transform:scale(1.05);}}
 .breath-orb{position:absolute;border-radius:50%;pointer-events:none;
@@ -1087,6 +1090,62 @@ function TypingIndicator() {
   );
 }
 
+function FormattedMessage({ content, isHaven }) {
+  if (!isHaven) {
+    return <p style={{ whiteSpace: "pre-wrap", fontSize: 15, margin: 0 }}>{content}</p>;
+  }
+
+  return (
+    <div className="haven-message-content" style={{ fontSize: 15, lineHeight: 1.7 }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ node, ...props }) => (
+            <p style={{ margin: "0 0 10px 0", lineHeight: 1.7 }} {...props} />
+          ),
+          h1: ({ node, ...props }) => (
+            <h4 style={{ fontSize: 16, fontWeight: 600, color: "var(--sage-2)", margin: "12px 0 6px 0" }} {...props} />
+          ),
+          h2: ({ node, ...props }) => (
+            <h4 style={{ fontSize: 15, fontWeight: 600, color: "var(--sage-2)", margin: "12px 0 6px 0" }} {...props} />
+          ),
+          h3: ({ node, ...props }) => (
+            <h5 style={{ fontSize: 14.5, fontWeight: 600, color: "var(--sage-2)", margin: "10px 0 4px 0" }} {...props} />
+          ),
+          ul: ({ node, ...props }) => (
+            <ul style={{ margin: "6px 0 10px 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }} {...props} />
+          ),
+          ol: ({ node, ...props }) => (
+            <ol style={{ margin: "6px 0 10px 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }} {...props} />
+          ),
+          li: ({ node, ...props }) => (
+            <li style={{ lineHeight: 1.65, fontSize: 14.5 }} {...props} />
+          ),
+          strong: ({ node, ...props }) => (
+            <strong style={{ color: "var(--text)", fontWeight: 600 }} {...props} />
+          ),
+          table: ({ node, ...props }) => (
+            <div style={{ overflowX: "auto", margin: "12px 0", borderRadius: 12, border: "1px solid var(--border)", background: "rgba(0,0,0,0.25)" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, textAlign: "left" }} {...props} />
+            </div>
+          ),
+          th: ({ node, ...props }) => (
+            <th style={{ padding: "8px 12px", background: "rgba(90,138,110,0.18)", color: "var(--sage)", borderBottom: "1px solid var(--border)", fontWeight: 600 }} {...props} />
+          ),
+          td: ({ node, ...props }) => (
+            <td style={{ padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.05)", lineHeight: 1.5 }} {...props} />
+          ),
+          blockquote: ({ node, ...props }) => (
+            <blockquote style={{ borderLeft: "3px solid var(--sage)", margin: "8px 0", paddingLeft: 12, color: "var(--muted)", fontStyle: "italic" }} {...props} />
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════
    MESSAGE BUBBLE
 ═══════════════════════════════════════════════ */
@@ -1111,7 +1170,7 @@ function MessageBubble({ msg, onSave }) {
       )}
       <div style={{ maxWidth: "75%", display: "flex", flexDirection: "column", alignItems: isHaven ? "flex-start" : "flex-end" }}>
         <div style={{ position: "relative", borderRadius: 18, padding: "12px 16px", lineHeight: 1.65, border: `1px solid ${isHaven ? "var(--bot-border)" : "var(--user-border)"}`, background: isHaven ? "var(--bot)" : "var(--user)" }}>
-          <p style={{ whiteSpace: "pre-wrap", fontSize: 15, margin: 0 }}>{msg.content}</p>
+          <FormattedMessage content={msg.content} isHaven={isHaven} />
           {isHaven && (
             <AnimatePresence>
               {showSaveBtn && (
