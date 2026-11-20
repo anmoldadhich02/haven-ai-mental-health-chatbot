@@ -4,6 +4,7 @@ import React, {
 import { motion, AnimatePresence } from "framer-motion";
 import { create } from "zustand";
 import MoodDashboard from "./components/MoodDashboard";
+import JournalPanel from "./journalPanel";
 import { useMutation } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,7 +13,7 @@ import {
   Bot, Menu, Plus, Send, Sparkles, User, Clock3, ChevronRight,
   Heart, Bookmark, Trash2, Edit3, Wind, Moon, Sun, Sunrise,
   Sunset, BarChart2, Leaf, Settings, Star, X, Check, ChevronDown,
-  MessageSquare, Brain, Zap, Coffee, Activity,
+  MessageSquare, Brain, Zap, Coffee, Activity, BookOpen,
 } from "lucide-react";
 
 /* ═══════════════════════════════════════════════
@@ -366,8 +367,9 @@ const useStore = create((set, get) => ({
   savedAdvice: [],       // [{id, content, timestamp, tag}]
   memories: [],          // [{id, text, timestamp}]
   checkinData: null,     // today's check-in answers
+  checkinHistory: [],    // past check-ins
   sessionReflection: null,
-  activePanel: null,     // "memories" | "settings" | "garden" | "analytics" | "breathing"
+  activePanel: null,     // "memories" | "settings" | "garden" | "analytics" | "breathing" | "journal"
   gardenStage: 0,
   currentSessionId: null, // id of the session currently being composed
 
@@ -384,13 +386,19 @@ const useStore = create((set, get) => ({
   // Load a past session's messages into the chat view
   setActiveSession: (sessionId) => {
     const { sessions } = get();
-    const msgs = sessions[sessionId];
-    if (msgs && msgs.length > 0) {
-      set({ activeSession: sessionId, messages: msgs, currentSessionId: sessionId,
-            input: "", isTyping: false, sessionReflection: null });
-    } else {
-      set({ activeSession: sessionId });
-    }
+    const msgs = sessions[sessionId] || [];
+    set({
+      activeSession: sessionId,
+      currentSessionId: sessionId,
+      messages: msgs,
+      input: "",
+      isTyping: false,
+      sessionReflection: null,
+      showIntention: false,
+    });
+    try {
+      localStorage.setItem("haven-active-session", sessionId);
+    } catch {}
   },
   setTyping: (v) => set({ isTyping: v }),
   setIntention: (v) => set({ intention: v, showIntention: false }),
@@ -400,30 +408,103 @@ const useStore = create((set, get) => ({
   setUserGoals: (v) => set({ userGoals: v }),
   setActivePanel: (v) => set({ activePanel: v }),
   setCheckinData: (v) => {
-    set({ checkinData: v });
-    const c = get().totalCheckins + 1;
-    set({ totalCheckins: c, gardenStage: getGardenStage(c).stage });
-    try { localStorage.setItem("haven-checkins", String(c)); } catch {}
+    const today = new Date().toDateString();
+    const entry = {
+      id: crypto.randomUUID(),
+      date: today,
+      timestamp: Date.now(),
+      sleep: v.sleep || "Okay",
+      stress: v.stress || "Manageable",
+      energy: v.energy || "Moderate",
+      mood: v.mood || "Good",
+    };
+    const moodMapping = { Great: "happy", Good: "calm", Mixed: "neutral", Difficult: "sad" };
+    const scoreMapping = { Great: 5, Good: 4, Mixed: 3, Difficult: 2 };
+    const moodKey = moodMapping[v.mood] || "calm";
+    const score = scoreMapping[v.mood] || 4;
+
+    set((s) => {
+      const filteredHist = (s.checkinHistory || []).filter(item => item.date !== today);
+      const updatedHistory = [entry, ...filteredHist].slice(0, 30);
+      const filteredMoodLog = s.moodLog.filter(m => m.date !== today);
+      const updatedMoodLog = [...filteredMoodLog, { date: today, score, mood: moodKey }].slice(-30);
+      const c = s.totalCheckins + 1;
+      return {
+        checkinData: v,
+        checkinHistory: updatedHistory,
+        moodLog: updatedMoodLog,
+        totalCheckins: c,
+        gardenStage: getGardenStage(c).stage,
+      };
+    });
+
+    try {
+      localStorage.setItem("haven-checkins", String(get().totalCheckins));
+      localStorage.setItem("haven-checkin-data", JSON.stringify(v));
+      localStorage.setItem("haven-checkin-history", JSON.stringify(get().checkinHistory));
+      localStorage.setItem("haven-moodlog", JSON.stringify(get().moodLog));
+    } catch {}
   },
   setSessionReflection: (v) => set({ sessionReflection: v }),
 
   addMessage: (m) => {
     set((s) => {
       const messages = [...s.messages, m];
-      // Also update the sessions map so the live session stays in sync
-      const sid = s.currentSessionId;
-      const sessions = sid ? { ...s.sessions, [sid]: messages } : s.sessions;
-      return { messages, sessions };
+      const sid = s.currentSessionId || s.activeSession || crypto.randomUUID();
+      const sessions = { ...s.sessions, [sid]: messages };
+
+      // Ensure this session is visible in history immediately upon sending
+      let history = [...s.history];
+      const existingIdx = history.findIndex(h => h.id === sid);
+      const cleanSnippet = (m.content || "").replace(/^[#*\s]+/, "").slice(0, 32).trim();
+      const autoTitle = cleanSnippet || "New chat";
+
+      if (existingIdx >= 0) {
+        if (history[existingIdx].title === "New chat" && cleanSnippet) {
+          history[existingIdx] = { ...history[existingIdx], title: autoTitle };
+        }
+      } else {
+        const today = new Date();
+        const entry = {
+          id: sid,
+          title: autoTitle,
+          date: today.toISOString(),
+          category: "Today",
+        };
+        history = [entry, ...history].slice(0, 30);
+      }
+
+      try {
+        localStorage.setItem("haven-sessions", JSON.stringify(sessions));
+        localStorage.setItem("haven-history", JSON.stringify(history));
+        localStorage.setItem("haven-active-session", sid);
+      } catch {}
+
+      return {
+        messages,
+        sessions,
+        history,
+        activeSession: sid,
+        currentSessionId: sid,
+      };
     });
   },
   clearConversation: () => {
-    // Generate a fresh session id for the new conversation
+    // Generate a fresh session id for a brand new conversation
     const newId = crypto.randomUUID();
     set({
-      messages: [], input: "", isTyping: false,
-      intention: null, showIntention: true, sessionReflection: null,
-      activeSession: null, currentSessionId: newId,
+      messages: [],
+      input: "",
+      isTyping: false,
+      intention: null,
+      showIntention: false,
+      sessionReflection: null,
+      activeSession: newId,
+      currentSessionId: newId,
     });
+    try {
+      localStorage.setItem("haven-active-session", newId);
+    } catch {}
   },
 
   saveAdvice: (content, tag = "General") => {
@@ -459,41 +540,83 @@ const useStore = create((set, get) => ({
     return { memories: updated };
   }),
   deleteSession: (id) => {
-  set((s) => {
-    const history = s.history.filter(i => i.id !== id);
-    const sessions = { ...s.sessions };
-    delete sessions[id];
-    const messages = s.activeSession === id ? [] : s.messages;
-    const activeSession = s.activeSession === id ? null : s.activeSession;
-    try {
-      localStorage.setItem("haven-history", JSON.stringify(history));
-      localStorage.setItem("haven-sessions", JSON.stringify(sessions));
-    } catch {}
-    return { history, sessions, messages, activeSession };
-  });
-},
+    set((s) => {
+      const history = s.history.filter(i => i.id !== id);
+      const sessions = { ...s.sessions };
+      delete sessions[id];
+
+      const isDeletingActive = s.activeSession === id;
+      let nextActive = s.activeSession;
+      let nextMessages = s.messages;
+      let nextCurrentId = s.currentSessionId;
+
+      if (isDeletingActive) {
+        if (history.length > 0 && sessions[history[0].id]) {
+          nextActive = history[0].id;
+          nextCurrentId = history[0].id;
+          nextMessages = sessions[history[0].id];
+        } else {
+          nextActive = crypto.randomUUID();
+          nextCurrentId = nextActive;
+          nextMessages = [];
+        }
+      }
+
+      try {
+        localStorage.setItem("haven-history", JSON.stringify(history));
+        localStorage.setItem("haven-sessions", JSON.stringify(sessions));
+        if (nextActive) {
+          localStorage.setItem("haven-active-session", nextActive);
+        }
+      } catch {}
+
+      return { history, sessions, messages: nextMessages, activeSession: nextActive, currentSessionId: nextCurrentId };
+    });
+  },
   saveSession: (title) => {
     const today = new Date();
     const dateStr = today.toDateString();
     const isYesterday = new Date(Date.now() - 86400000).toDateString();
     const category = dateStr === isYesterday ? "Yesterday" : "Today";
-    const { currentSessionId, messages, sessions } = get();
+    const { currentSessionId, messages, sessions, history } = get();
     const sid = currentSessionId || crypto.randomUUID();
     // Persist full messages for this session keyed by id
     const updatedSessions = { ...sessions, [sid]: messages };
     try { localStorage.setItem("haven-sessions", JSON.stringify(updatedSessions)); } catch {}
-    const entry = { id: sid, title, date: today.toISOString(), category };
-    const cur = get().history.filter(i => i.id !== sid);
-    const updated = [entry, ...cur].slice(0, 30);
-    set({ history: updated, activeSession: sid, currentSessionId: sid, sessions: updatedSessions });
-    try { localStorage.setItem("haven-history", JSON.stringify(updated)); } catch {}
+
+    const existingIndex = history.findIndex(i => i.id === sid);
+    let updatedHistory;
+    if (existingIndex >= 0) {
+      updatedHistory = [...history];
+      if (title && title !== "Support session" && title !== "New chat") {
+        updatedHistory[existingIndex] = { ...updatedHistory[existingIndex], title };
+      }
+    } else {
+      const entry = { id: sid, title: title || "New chat", date: today.toISOString(), category };
+      updatedHistory = [entry, ...history].slice(0, 30);
+    }
+
+    set({ history: updatedHistory, activeSession: sid, currentSessionId: sid, sessions: updatedSessions });
+    try {
+      localStorage.setItem("haven-history", JSON.stringify(updatedHistory));
+      localStorage.setItem("haven-active-session", sid);
+    } catch {}
   },
 
   hydrate: () => {
     try {
+      let history = [];
       const h = localStorage.getItem("haven-history");
-      if (h) { const p = JSON.parse(h); if (Array.isArray(p)) set({ history: p }); }
+      if (h) {
+        const p = JSON.parse(h);
+        if (Array.isArray(p)) {
+          history = p;
+          set({ history });
+        }
+      }
+
       // Restore full session message maps
+      let sessions = {};
       const sv = localStorage.getItem("haven-sessions");
       if (sv) {
         const parsed = JSON.parse(sv);
@@ -502,8 +625,43 @@ const useStore = create((set, get) => ({
         Object.entries(parsed).forEach(([sid, msgs]) => {
           fixed[sid] = msgs.map(m => ({ ...m, timestamp: new Date(m.timestamp) }));
         });
+        sessions = fixed;
         set({ sessions: fixed });
       }
+
+      // Restore active session consistently across reload
+      const savedActive = localStorage.getItem("haven-active-session");
+      if (savedActive && sessions[savedActive] && sessions[savedActive].length > 0) {
+        set({
+          activeSession: savedActive,
+          currentSessionId: savedActive,
+          messages: sessions[savedActive],
+        });
+      } else if (savedActive) {
+        // Saved active session is a fresh unmessaged chat
+        set({
+          activeSession: savedActive,
+          currentSessionId: savedActive,
+          messages: [],
+        });
+      } else if (history.length > 0 && sessions[history[0].id] && sessions[history[0].id].length > 0) {
+        const mostRecent = history[0].id;
+        set({
+          activeSession: mostRecent,
+          currentSessionId: mostRecent,
+          messages: sessions[mostRecent],
+        });
+        try { localStorage.setItem("haven-active-session", mostRecent); } catch {}
+      } else {
+        const freshId = crypto.randomUUID();
+        set({
+          activeSession: freshId,
+          currentSessionId: freshId,
+          messages: [],
+        });
+        try { localStorage.setItem("haven-active-session", freshId); } catch {}
+      }
+
       const name = localStorage.getItem("haven-name");
       if (name) set({ userName: name });
       const streak = localStorage.getItem("haven-streak");
@@ -521,8 +679,25 @@ const useStore = create((set, get) => ({
         const c = parseInt(checkins, 10) || 0;
         set({ totalCheckins: c, gardenStage: getGardenStage(c).stage });
       }
-      // Generate a fresh session id for any new conversation
-      set({ currentSessionId: crypto.randomUUID() });
+      const rawCkData = localStorage.getItem("haven-checkin-data");
+      const rawCkHist = localStorage.getItem("haven-checkin-history");
+      if (rawCkData) {
+        try { set({ checkinData: JSON.parse(rawCkData) }); } catch {}
+      }
+      if (rawCkHist) {
+        try { set({ checkinHistory: JSON.parse(rawCkHist) }); } catch {}
+      } else {
+        const seedHistory = [
+          { id: "c1", date: new Date(Date.now() - 4 * 86400000).toDateString(), mood: "Good", stress: "Manageable", sleep: "Very well", energy: "Moderate", score: 4 },
+          { id: "c2", date: new Date(Date.now() - 3 * 86400000).toDateString(), mood: "Mixed", stress: "High", sleep: "Poorly", energy: "Low", score: 2 },
+          { id: "c3", date: new Date(Date.now() - 2 * 86400000).toDateString(), mood: "Good", stress: "Manageable", sleep: "Okay", energy: "Moderate", score: 3 },
+          { id: "c4", date: new Date(Date.now() - 1 * 86400000).toDateString(), mood: "Great", stress: "Minimal", sleep: "Very well", energy: "High", score: 5 },
+        ];
+        set({ checkinHistory: seedHistory });
+        if (!rawCkData) {
+          set({ checkinData: { sleep: "Very well", energy: "High", stress: "Minimal", mood: "Great" } });
+        }
+      }
     } catch {}
   },
 
@@ -1317,80 +1492,388 @@ function GardenPanel({ totalCheckins, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════
-   ANALYTICS PANEL
+   MOOD, STRESS & SLEEP TRACKER PANEL
 ═══════════════════════════════════════════════ */
-function AnalyticsPanel({ moodLog, streak, onClose }) {
+function AnalyticsPanel({ moodLog, streak, checkinData, checkinHistory = [], onOpenCheckin, onBreathing, onClose }) {
+  const [activeTab, setActiveTab] = useState("overview");
+
+  const STRESS_COLORS = {
+    Minimal: "#52c480",
+    Manageable: "#6a9ecf",
+    High: "#e6b849",
+    Overwhelming: "#e06d7b",
+  };
+  const STRESS_SCORES = {
+    Minimal: 1,
+    Manageable: 2,
+    High: 3,
+    Overwhelming: 4,
+  };
+
+  const SLEEP_COLORS = {
+    "Very well": "#68ba88",
+    "Okay": "#7aa0cf",
+    "Poorly": "#c99859",
+    "Didn't sleep": "#b86884",
+  };
+  const SLEEP_SCORES = {
+    "Very well": 4,
+    "Okay": 3,
+    "Poorly": 2,
+    "Didn't sleep": 1,
+  };
+
+  const moodEmoji = { happy: "😊", calm: "😌", neutral: "😐", anxious: "😰", sad: "😔", "very-sad": "😢", Great: "😊", Good: "😌", Mixed: "😐", Difficult: "😔" };
+
   const last7 = useMemo(() => {
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(Date.now() - i * 86400000);
       const dateStr = d.toDateString();
-      const entry = moodLog.find(m => m.date === dateStr);
-      days.push({ date: d, score: entry?.score, mood: entry?.mood, label: d.toLocaleDateString(undefined, { weekday: "short" }) });
+      const moodEntry = moodLog.find(m => m.date === dateStr);
+      const checkinEntry = checkinHistory.find(c => c.date === dateStr);
+      days.push({
+        date: d,
+        dateStr,
+        label: d.toLocaleDateString(undefined, { weekday: "short" }),
+        moodScore: moodEntry?.score,
+        mood: moodEntry?.mood || checkinEntry?.mood,
+        stress: checkinEntry?.stress,
+        sleep: checkinEntry?.sleep,
+        energy: checkinEntry?.energy,
+      });
     }
     return days;
-  }, [moodLog]);
+  }, [moodLog, checkinHistory]);
 
-  const avgScore = moodLog.length > 0 ? (moodLog.reduce((a, b) => a + b.score, 0) / moodLog.length).toFixed(1) : "—";
-  const bestDay = moodLog.length > 0 ? moodLog.reduce((a, b) => a.score > b.score ? a : b) : null;
-  const moodEmoji = { happy: "😊", calm: "😌", neutral: "😐", anxious: "😰", sad: "😔", "very-sad": "😢" };
+  const avgMood = moodLog.length > 0 ? (moodLog.reduce((a, b) => a + b.score, 0) / moodLog.length).toFixed(1) : "—";
+
+  const stressEntries = checkinHistory.filter(c => c.stress);
+  const stressCounts = { Minimal: 0, Manageable: 0, High: 0, Overwhelming: 0 };
+  stressEntries.forEach(c => { if (stressCounts[c.stress] !== undefined) stressCounts[c.stress]++; });
+
+  const sleepEntries = checkinHistory.filter(c => c.sleep);
+  const sleepCounts = { "Very well": 0, "Okay": 0, "Poorly": 0, "Didn't sleep": 0 };
+  sleepEntries.forEach(c => { if (sleepCounts[c.sleep] !== undefined) sleepCounts[c.sleep]++; });
 
   return (
-    <motion.div className="panel-overlay" initial={{ x: 360 }} animate={{ x: 0 }} exit={{ x: 360 }} transition={{ type: "spring", damping: 24 }}>
-      <div style={{ padding: "20px 20px 12px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0, fontSize: 16, fontFamily: "Fraunces,serif", fontWeight: 400, color: "var(--text)" }}>Mood Analytics</h3>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}><X size={18} /></button>
-      </div>
-      <div className="panel-scroll" style={{ padding: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-          {[
-            { label: "Day Streak", value: `🔥 ${streak}`, sub: "consecutive days" },
-            { label: "Avg Mood", value: avgScore, sub: "out of 5" },
-            { label: "Check-ins", value: moodLog.length, sub: "total logged" },
-            { label: "Best Mood", value: bestDay ? moodEmoji[bestDay.mood] || "🌟" : "—", sub: bestDay ? formatDate(new Date(bestDay.date)) : "log some moods" },
-          ].map(c => (
-            <div key={c.label} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "14px", border: "1px solid var(--border)" }}>
-              <div style={{ fontSize: 10, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>{c.label}</div>
-              <div style={{ fontSize: 22, fontWeight: 300, fontFamily: "Fraunces,serif", color: "var(--text)" }}>{c.value}</div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{c.sub}</div>
-            </div>
-          ))}
+    <motion.div className="panel-overlay" initial={{ x: 380 }} animate={{ x: 0 }} exit={{ x: 380 }} transition={{ type: "spring", damping: 24 }}>
+      <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 16, fontFamily: "Fraunces,serif", fontWeight: 400, color: "var(--text)" }}>
+            Mood, Stress & Sleep Tracker
+          </h3>
+          <p style={{ margin: "3px 0 0", fontSize: 11, color: "var(--muted)" }}>
+            Emotional vitals, stress trends & restorative sleep
+          </p>
         </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+      </div>
 
-        <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 }}>Last 7 Days</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
-            {last7.map((d, i) => {
-              const h = d.score ? (d.score / 5) * 64 : 4;
-              return (
-                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                  <motion.div initial={{ height: 0 }} animate={{ height: h }} transition={{ delay: i * 0.07, duration: 0.5, ease: "easeOut" }}
-                    style={{ width: "100%", borderRadius: 4, background: d.score ? "var(--sage)" : "var(--border)", opacity: d.score ? 0.8 : 0.3, minHeight: 4 }} />
-                  <div style={{ fontSize: 10, color: "var(--muted-2)" }}>{d.label}</div>
-                </div>
-              );
-            })}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 10px", background: "rgba(0,0,0,0.15)" }}>
+        {[
+          { id: "overview", label: "Overview", icon: "✨" },
+          { id: "mood", label: "Mood", icon: "💭" },
+          { id: "stress", label: "Stress", icon: "🌊" },
+          { id: "sleep", label: "Sleep", icon: "🌙" },
+          { id: "history", label: "Log", icon: "📋" },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            style={{
+              flex: 1, padding: "10px 4px", fontSize: 11, border: "none", background: "none",
+              color: activeTab === t.id ? "var(--sage)" : "var(--muted)",
+              borderBottom: activeTab === t.id ? "2px solid var(--sage)" : "2px solid transparent",
+              fontWeight: activeTab === t.id ? 600 : 400, cursor: "pointer", display: "flex",
+              alignItems: "center", justifyContent: "center", gap: 3, transition: "all 140ms"
+            }}>
+            <span>{t.icon}</span> {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="panel-scroll" style={{ padding: 20 }}>
+        {/* Today's Vitals Card */}
+        <div style={{ background: "linear-gradient(135deg, rgba(90,138,110,0.12), rgba(255,255,255,0.02))", borderRadius: 16, padding: "14px", border: "1px solid rgba(90,138,110,0.25)", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--sage)", fontWeight: 600 }}>Today's Vitals</span>
+            {onOpenCheckin && (
+              <button
+                onClick={onOpenCheckin}
+                style={{ fontSize: 11, color: "var(--text)", background: "rgba(90,138,110,0.25)", border: "1px solid var(--border)", borderRadius: 8, padding: "3px 9px", cursor: "pointer" }}>
+                {checkinData ? "Update Check-in" : "+ Check In Today"}
+              </button>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: "var(--muted-2)" }}>💭 Mood</div>
+              <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500, marginTop: 2 }}>{checkinData?.mood || "Not logged"}</div>
+            </div>
+            <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: "var(--muted-2)" }}>🌊 Stress</div>
+              <div style={{ fontSize: 13, color: STRESS_COLORS[checkinData?.stress] || "var(--text)", fontWeight: 500, marginTop: 2 }}>{checkinData?.stress || "Not logged"}</div>
+            </div>
+            <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: "var(--muted-2)" }}>🌙 Sleep</div>
+              <div style={{ fontSize: 13, color: SLEEP_COLORS[checkinData?.sleep] || "var(--text)", fontWeight: 500, marginTop: 2 }}>{checkinData?.sleep || "Not logged"}</div>
+            </div>
+            <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: "var(--muted-2)" }}>⚡ Energy</div>
+              <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500, marginTop: 2 }}>{checkinData?.energy || "Not logged"}</div>
+            </div>
           </div>
         </div>
 
-        <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)" }}>
-          <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Mood Distribution</div>
-          {MOOD_OPTS.map(m => {
-            const count = moodLog.filter(l => l.mood === m.key).length;
-            const pct = moodLog.length ? Math.round((count / moodLog.length) * 100) : 0;
-            return (
-              <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 14, width: 20 }}>{m.emoji}</span>
-                <span style={{ fontSize: 12, color: "var(--muted)", width: 52 }}>{m.label}</span>
-                <div style={{ flex: 1, height: 5, borderRadius: 99, background: "var(--border)", overflow: "hidden" }}>
-                  <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: 0.2, duration: 0.6 }}
-                    style={{ height: "100%", background: "var(--sage)", borderRadius: 99 }} />
+        {/* TAB 1: OVERVIEW */}
+        {activeTab === "overview" && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "Day Streak", value: `🔥 ${streak}`, sub: "consecutive days" },
+                { label: "Avg Mood", value: `${avgMood} / 5`, sub: "emotional score" },
+                { label: "Current Stress", value: checkinData?.stress || "Manageable", sub: "today's level", color: STRESS_COLORS[checkinData?.stress] },
+                { label: "Sleep Quality", value: checkinData?.sleep || "Very well", sub: "recent rest", color: SLEEP_COLORS[checkinData?.sleep] },
+              ].map(c => (
+                <div key={c.label} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "12px", border: "1px solid var(--border)" }}>
+                  <div style={{ fontSize: 10, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{c.label}</div>
+                  <div style={{ fontSize: 17, fontWeight: 400, fontFamily: "Fraunces,serif", color: c.color || "var(--text)" }}>{c.value}</div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{c.sub}</div>
                 </div>
-                <span style={{ fontSize: 11, color: "var(--muted-2)", width: 28, textAlign: "right" }}>{pct}%</span>
+              ))}
+            </div>
+
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>7-Day Vitals Matrix</div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+                {last7.map((d, i) => (
+                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 2px", background: "rgba(0,0,0,0.18)", borderRadius: 10 }}>
+                    <span style={{ fontSize: 10, color: "var(--muted-2)" }}>{d.label}</span>
+                    <span style={{ fontSize: 14 }} title={`Mood: ${d.mood || "N/A"}`}>{moodEmoji[d.mood] || "💭"}</span>
+                    <span
+                      style={{ width: 7, height: 7, borderRadius: "50%", background: STRESS_COLORS[d.stress] || "var(--border)" }}
+                      title={`Stress: ${d.stress || "N/A"}`} />
+                    <span style={{ fontSize: 10 }} title={`Sleep: ${d.sleep || "N/A"}`}>
+                      {d.sleep === "Very well" ? "🌙" : d.sleep === "Okay" ? "😴" : d.sleep === "Poorly" ? "🥱" : "—"}
+                    </span>
+                  </div>
+                ))}
               </div>
-            );
-          })}
+              <div style={{ display: "flex", justifyContent: "center", gap: 14, marginTop: 12, fontSize: 10, color: "var(--muted-2)" }}>
+                <span>💭 Mood</span>
+                <span>• Stress (dot)</span>
+                <span>🌙 Sleep</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: MOOD */}
+        {activeTab === "mood" && (
+          <div>
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 }}>Last 7 Days Mood Score</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 85 }}>
+                {last7.map((d, i) => {
+                  const h = d.moodScore ? (d.moodScore / 5) * 65 : 6;
+                  return (
+                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                      <motion.div initial={{ height: 0 }} animate={{ height: h }} transition={{ delay: i * 0.05, duration: 0.4 }}
+                        style={{ width: "100%", borderRadius: 4, background: d.moodScore ? "var(--sage)" : "var(--border)", opacity: d.moodScore ? 0.85 : 0.3, minHeight: 4 }} />
+                      <div style={{ fontSize: 10, color: "var(--muted-2)" }}>{d.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Mood Distribution</div>
+              {MOOD_OPTS.map(m => {
+                const count = moodLog.filter(l => l.mood === m.key).length;
+                const pct = moodLog.length ? Math.round((count / moodLog.length) * 100) : 0;
+                return (
+                  <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 14, width: 20 }}>{m.emoji}</span>
+                    <span style={{ fontSize: 12, color: "var(--muted)", width: 52 }}>{m.label}</span>
+                    <div style={{ flex: 1, height: 5, borderRadius: 99, background: "var(--border)", overflow: "hidden" }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: 0.1, duration: 0.5 }}
+                        style={{ height: "100%", background: "var(--sage)", borderRadius: 99 }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: "var(--muted-2)", width: 28, textAlign: "right" }}>{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: STRESS */}
+        {activeTab === "stress" && (
+          <div>
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 }}>7-Day Stress Level Trend</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {last7.map((d, i) => {
+                  const s = d.stress || "Manageable";
+                  const score = STRESS_SCORES[s] || 2;
+                  const pct = (score / 4) * 100;
+                  const color = STRESS_COLORS[s] || "var(--sage)";
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 11, color: "var(--muted-2)", width: 34 }}>{d.label}</span>
+                      <div style={{ flex: 1, height: 8, borderRadius: 99, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
+                        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: i * 0.05, duration: 0.4 }}
+                          style={{ height: "100%", background: color, borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: 11, color: color, width: 90, textAlign: "right", fontWeight: 500 }}>{s}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Stress Breakdown</div>
+              {["Minimal", "Manageable", "High", "Overwhelming"].map(level => {
+                const count = stressCounts[level] || 0;
+                const total = stressEntries.length || 1;
+                const pct = Math.round((count / total) * 100);
+                const color = STRESS_COLORS[level];
+                return (
+                  <div key={level} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ width: 95, fontSize: 12, color }}>{level}</span>
+                    <div style={{ flex: 1, height: 5, borderRadius: 99, background: "var(--border)", overflow: "hidden" }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: 0.1, duration: 0.5 }}
+                        style={{ height: "100%", background: color, borderRadius: 99 }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: "var(--muted-2)", width: 30, textAlign: "right" }}>{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {onBreathing && (
+              <div style={{ background: "rgba(90,138,110,0.08)", borderRadius: 14, padding: "14px", border: "1px solid rgba(90,138,110,0.25)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text)" }}>High stress moment?</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Ground your nervous system with a breathing cycle</div>
+                </div>
+                <button
+                  onClick={onBreathing}
+                  style={{ background: "var(--sage)", color: "#0d0f14", border: "none", borderRadius: 10, padding: "6px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  Breathe 🌿
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: SLEEP */}
+        {activeTab === "sleep" && (
+          <div>
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 }}>7-Day Rest Quality Trend</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {last7.map((d, i) => {
+                  const sl = d.sleep || "Very well";
+                  const score = SLEEP_SCORES[sl] || 3;
+                  const pct = (score / 4) * 100;
+                  const color = SLEEP_COLORS[sl] || "var(--sage)";
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 11, color: "var(--muted-2)", width: 34 }}>{d.label}</span>
+                      <div style={{ flex: 1, height: 8, borderRadius: 99, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
+                        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: i * 0.05, duration: 0.4 }}
+                          style={{ height: "100%", background: color, borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: 11, color: color, width: 90, textAlign: "right", fontWeight: 500 }}>{sl}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "16px", border: "1px solid var(--border)", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Sleep Quality Distribution</div>
+              {["Very well", "Okay", "Poorly", "Didn't sleep"].map(level => {
+                const count = sleepCounts[level] || 0;
+                const total = sleepEntries.length || 1;
+                const pct = Math.round((count / total) * 100);
+                const color = SLEEP_COLORS[level];
+                return (
+                  <div key={level} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ width: 95, fontSize: 12, color }}>{level}</span>
+                    <div style={{ flex: 1, height: 5, borderRadius: 99, background: "var(--border)", overflow: "hidden" }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ delay: 0.1, duration: 0.5 }}
+                        style={{ height: "100%", background: color, borderRadius: 99 }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: "var(--muted-2)", width: 30, textAlign: "right" }}>{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 14, padding: "14px", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>🌙 Haven Sleep Tip</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
+                Sleep quality directly impacts emotional resilience. Unwinding with a slow exhale or journaling your thoughts before bed signals your body to enter deep, restorative sleep.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: HISTORY */}
+        {activeTab === "history" && (
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Past Check-ins</div>
+            {checkinHistory.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 30, color: "var(--muted)", fontSize: 13 }}>
+                No past check-ins recorded yet. Complete today's check-in to begin logging!
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {checkinHistory.map((item, i) => (
+                  <div key={item.id || i} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 12, padding: "12px", border: "1px solid var(--border)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text)" }}>{item.date}</span>
+                      <span style={{ fontSize: 10, color: "var(--muted-2)" }}>Vitals Log</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 11 }}>
+                      <span style={{ background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "3px 8px", color: "var(--text)" }}>💭 {item.mood}</span>
+                      <span style={{ background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "3px 8px", color: STRESS_COLORS[item.stress] || "var(--text)" }}>🌊 {item.stress}</span>
+                      <span style={{ background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "3px 8px", color: SLEEP_COLORS[item.sleep] || "var(--text)" }}>🌙 {item.sleep}</span>
+                      {item.energy && <span style={{ background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "3px 8px", color: "var(--muted)" }}>⚡ {item.energy}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   JOURNAL DRAWER
+═══════════════════════════════════════════════ */
+function JournalDrawer({ onClose }) {
+  return (
+    <motion.div className="panel-overlay" initial={{ x: 380 }} animate={{ x: 0 }} exit={{ x: 380 }} transition={{ type: "spring", damping: 24 }}>
+      <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 16, fontFamily: "Fraunces,serif", fontWeight: 400, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>
+            <BookOpen size={17} style={{ color: "var(--sage)" }} /> Personal Journal
+          </h3>
+          <p style={{ margin: "3px 0 0", fontSize: 11, color: "var(--muted)" }}>Reflect and record private insights</p>
         </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+      </div>
+      <div className="panel-scroll" style={{ padding: 20 }}>
+        <JournalPanel />
       </div>
     </motion.div>
   );
@@ -1639,40 +2122,62 @@ function ChatInput({ onSend, disabled }) {
 /* ═══════════════════════════════════════════════
    TOP BAR
 ═══════════════════════════════════════════════ */
-function TopBar({ intention, messages, onBreathing, onReflect, isPending }) {
+function TopBar({ intention, messages, onBreathing, onReflect, isPending, onNewChat, onOpenIntention }) {
   const setActivePanel = useStore(s => s.setActivePanel);
-
-  const sessionReflection = useStore(s => s.sessionReflection);
   const hasMessages = messages.length > 0;
 
   return (
-    <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border)", padding: "12px 24px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--muted)" }}>
+    <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border)", padding: "12px 24px", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--muted)", minWidth: 0 }}>
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--sage)", boxShadow: "0 0 0 5px rgba(90,138,110,0.12)", display: "inline-block", flexShrink: 0 }} />
-        <span>Haven is here with you</span>
-        {intention && (
-          <span style={{ marginLeft: 4, padding: "2px 10px", borderRadius: 999, fontSize: 11, background: "rgba(90,138,110,0.11)", border: "1px solid rgba(90,138,110,0.24)", color: "var(--sage)" }}>
-            {intention.icon} {intention.label}
-          </span>
+        <span style={{ whiteSpace: "nowrap" }}>Haven is here with you</span>
+        {intention ? (
+          <button onClick={onOpenIntention} title="Change intention"
+            style={{ marginLeft: 4, padding: "3px 10px", borderRadius: 999, fontSize: 11, background: "rgba(90,138,110,0.11)", border: "1px solid rgba(90,138,110,0.28)", color: "var(--sage)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit" }}>
+            <span>{intention.icon}</span> <span>{intention.label}</span>
+          </button>
+        ) : (
+          <button onClick={onOpenIntention} title="Set daily intention"
+            style={{ marginLeft: 4, padding: "3px 8px", borderRadius: 999, fontSize: 11, background: "rgba(255,255,255,0.03)", border: "1px dashed var(--border)", color: "var(--muted-2)", cursor: "pointer", fontFamily: "inherit" }}>
+            + Set intention
+          </button>
         )}
       </div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        {/* Quick New Chat Button */}
+        <button onClick={onNewChat} title="Start a fresh chat" className="hover-lift"
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 10, border: "1px solid rgba(90,138,110,0.38)", background: "rgba(90,138,110,0.14)", color: "var(--text)", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>
+          <Plus size={14} style={{ color: "var(--sage)" }} />
+          <span>New chat</span>
+        </button>
+
+        {/* Mood, Stress & Sleep Tracker */}
+        <button onClick={() => setActivePanel("analytics")} title="Mood, Stress & Sleep Tracker" className="hover-lift"
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+          <Activity size={14} style={{ color: "var(--sage)" }} />
+          <span>Tracker</span>
+        </button>
+
+        {/* Journal */}
+        <button onClick={() => setActivePanel("journal")} title="Personal Journal" className="hover-lift"
+          style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+          <BookOpen size={14} style={{ color: "var(--sage)" }} />
+          <span>Journal</span>
+        </button>
+
         {hasMessages && (
           <button onClick={onReflect} title="Session Reflection"
-            style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontFamily: "inherit" }}>
+            style={{ padding: "6px 11px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontFamily: "inherit" }}>
             <Star size={13} /> Reflect
           </button>
         )}
         <button onClick={onBreathing} title="Breathing Exercise"
-          style={{ width: 36, height: 36, borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Wind size={15} />
         </button>
-        <button onClick={() => setActivePanel("analytics")} title="Mood Analytics"
-          style={{ width: 36, height: 36, borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <BarChart2 size={15} />
-        </button>
         <button onClick={() => setActivePanel("memories")} title="Memories & Saved"
-          style={{ width: 36, height: 36, borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", color: "var(--muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Bookmark size={15} />
         </button>
       </div>
@@ -1693,6 +2198,10 @@ function Sidebar({ onNew }) {
   const totalCheckins = useStore(s => s.totalCheckins);
   const setActivePanel = useStore(s => s.setActivePanel);
   const deleteSession = useStore(s => s.deleteSession);
+  const messages = useStore(s => s.messages);
+
+  const isNewChatActive = !history.some(h => h.id === active) || (messages.length === 0);
+
   // Group history by category
   const grouped = useMemo(() => {
     const groups = { Today: [], Yesterday: [], Earlier: [] };
@@ -1716,9 +2225,27 @@ function Sidebar({ onNew }) {
 
       <GardenWidget totalCheckins={totalCheckins} onClick={() => setActivePanel("garden")} />
 
+      {/* New chat button */}
       <button onClick={onNew} className="hover-lift"
-        style={{ margin: "14px 0 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 16, border: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", padding: "11px", fontSize: 13, color: "var(--text)", cursor: "pointer", fontFamily: "inherit" }}>
-        <Plus size={15} /> New session
+        style={{
+          margin: "14px 0 12px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          borderRadius: 14,
+          border: isNewChatActive ? "1px solid rgba(90,138,110,0.55)" : "1px solid var(--border)",
+          background: isNewChatActive ? "rgba(90,138,110,0.18)" : "rgba(255,255,255,0.02)",
+          padding: "10px",
+          fontSize: 13,
+          fontWeight: 500,
+          color: isNewChatActive ? "var(--text)" : "var(--muted)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          boxShadow: isNewChatActive ? "0 0 14px rgba(90,138,110,0.18)" : "none",
+          transition: "all 150ms ease",
+        }}>
+        <Plus size={15} style={{ color: "var(--sage)" }} /> New chat
       </button>
 
       <div className="sidebar-scroll" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2, paddingRight: 2 }}>
@@ -1728,21 +2255,21 @@ function Sidebar({ onNew }) {
               {cat}
             </div>
             {items.map(item => {
-              const isAct = active === item.id;
+              const isAct = active === item.id && !isNewChatActive;
               return (
                 <div key={item.id}
-  style={{ display: "flex", alignItems: "center", borderRadius: 10, border: `1px solid ${isAct ? "rgba(90,138,110,0.38)" : "transparent"}`, background: isAct ? "rgba(90,138,110,0.13)" : "transparent", transition: "all 140ms", width: "100%", overflow: "hidden" }}
-  onMouseEnter={e => { const btn = e.currentTarget.querySelector(".del-btn"); if(btn) btn.style.opacity = "1"; }}
-  onMouseLeave={e => { const btn = e.currentTarget.querySelector(".del-btn"); if(btn) btn.style.opacity = "0"; }}>
-  <button onClick={() => setActive(item.id)}
-    style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", textAlign: "left", fontSize: 12, cursor: "pointer", color: isAct ? "var(--text)" : "var(--muted)", fontFamily: "inherit", background: "none", border: "none", minWidth: 0 }}>
-    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
-  </button>
-  <button className="del-btn" onClick={(e) => { e.stopPropagation(); deleteSession(item.id); }}
-    style={{ opacity: 0, flexShrink: 0, background: "none", border: "none", color: "var(--muted-2)", cursor: "pointer", padding: "8px 6px", display: "flex", alignItems: "center", transition: "opacity 140ms" }}>
-    <Trash2 size={12} />
-  </button>
-</div>
+                  style={{ display: "flex", alignItems: "center", borderRadius: 10, border: `1px solid ${isAct ? "rgba(90,138,110,0.45)" : "transparent"}`, background: isAct ? "rgba(90,138,110,0.16)" : "transparent", transition: "all 140ms", width: "100%", overflow: "hidden" }}
+                  onMouseEnter={e => { const btn = e.currentTarget.querySelector(".del-btn"); if (btn) btn.style.opacity = "1"; }}
+                  onMouseLeave={e => { const btn = e.currentTarget.querySelector(".del-btn"); if (btn) btn.style.opacity = "0"; }}>
+                  <button onClick={() => setActive(item.id)}
+                    style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", textAlign: "left", fontSize: 12, cursor: "pointer", color: isAct ? "var(--text)" : "var(--muted)", fontFamily: "inherit", background: "none", border: "none", minWidth: 0 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
+                  </button>
+                  <button className="del-btn" title="Delete chat" onClick={(e) => { e.stopPropagation(); deleteSession(item.id); }}
+                    style={{ opacity: 0, flexShrink: 0, background: "none", border: "none", color: "var(--muted-2)", cursor: "pointer", padding: "8px 6px", display: "flex", alignItems: "center", transition: "opacity 140ms" }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -1778,7 +2305,7 @@ export default function App() {
     persistName, persistStreak, persistMoodLog, persistTone,
     userName, preferredTone, intention, showIntention, setIntention, setShowIntention,
     saveAdvice, removeSaved, savedAdvice, memories, addMemory, editMemory, removeMemory,
-    selectedMood, setCheckinData, checkinData, setSessionReflection, sessionReflection,
+    selectedMood, setCheckinData, checkinData, checkinHistory, setSessionReflection, sessionReflection,
     streak, moodLog, totalCheckins, activePanel, setActivePanel,
   } = useStore();
 
@@ -1790,15 +2317,17 @@ export default function App() {
   useEffect(() => {
     hydrate();
     const seen = localStorage.getItem("haven-seen");
-    if (!seen) { setShowNameSetup(true); localStorage.setItem("haven-seen", "1"); }
-    else { setShowIntention(true); }
+    if (!seen) {
+      setShowNameSetup(true);
+      localStorage.setItem("haven-seen", "1");
+    }
     persistStreak();
 
-    // Show daily check-in
+    // Show daily check-in once per day
     const lastCheckin = localStorage.getItem("haven-last-checkin");
     const today = new Date().toDateString();
     if (lastCheckin !== today) {
-      setTimeout(() => setShowCheckin(true), 2000);
+      setTimeout(() => setShowCheckin(true), 2500);
     }
   }, []);
 
@@ -1808,12 +2337,9 @@ export default function App() {
       setTyping(false);
       const reply = data.bot_reply ?? "I'm here with you.";
       addMessage({ id: crypto.randomUUID(), role: "haven", content: reply, timestamp: new Date() });
-      const isErrorReply = reply.startsWith("Sorry, I'm having trouble") || reply.startsWith("AI service is not configured") || reply.startsWith("Haven is currently offline");
-      const title = isErrorReply ? "Support session" : reply.slice(0, 34).trim();
-      saveSession(title || "New session");
       persistMoodLog();
       // Auto-save memory if notable
-      if (!isErrorReply && reply.length > 80 && Math.random() < 0.15) {
+      if (reply.length > 80 && Math.random() < 0.15) {
         const snippet = reply.split(".")[0].trim();
         if (snippet.length > 20) addMemory(snippet);
       }
@@ -1880,7 +2406,19 @@ export default function App() {
           <GardenPanel key="garden" totalCheckins={totalCheckins} onClose={() => setActivePanel(null)} />
         )}
         {activePanel === "analytics" && (
-          <AnalyticsPanel key="analytics" moodLog={moodLog} streak={streak} onClose={() => setActivePanel(null)} />
+          <AnalyticsPanel
+            key="analytics"
+            moodLog={moodLog}
+            streak={streak}
+            checkinData={checkinData}
+            checkinHistory={checkinHistory}
+            onOpenCheckin={() => { setActivePanel(null); setShowCheckin(true); }}
+            onBreathing={() => { setActivePanel(null); setShowBreathing(true); }}
+            onClose={() => setActivePanel(null)}
+          />
+        )}
+        {activePanel === "journal" && (
+          <JournalDrawer key="journal" onClose={() => setActivePanel(null)} />
         )}
         {activePanel === "memories" && (
           <MemoryPanel key="memories" memories={memories} savedAdvice={savedAdvice}
@@ -1897,10 +2435,15 @@ export default function App() {
       <div className="layout-root" style={{ background: "transparent" }}>
         <Sidebar onNew={clearConversation} />
         <main className="main-col" style={{ background: "transparent" }}>
-          <TopBar intention={intention} messages={messages}
+          <TopBar
+            intention={intention}
+            messages={messages}
             onBreathing={() => setShowBreathing(true)}
             onReflect={handleReflect}
-            isPending={mutation.isPending} />
+            onNewChat={clearConversation}
+            onOpenIntention={() => setShowIntention(true)}
+            isPending={mutation.isPending}
+          />
           <ChatWindow onPickSuggestion={(t) => setInput(t)} onSave={(content) => saveAdvice(content)} />
           <ChatInput onSend={sendMessage} disabled={mutation.isPending} />
         </main>
