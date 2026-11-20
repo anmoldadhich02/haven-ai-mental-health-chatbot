@@ -1,8 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.services.llm import generate_response
 from app.services.risk_detection import detect_risk
-from app.db.database import save_chat, get_chats, save_memory, get_memories
+from app.db.database import (
+    save_chat, get_chats, save_memory, get_memories,
+    delete_memory, update_memory
+)
 from app.services.memory_service import extract_memory
 
 router = APIRouter()
@@ -55,7 +58,8 @@ def chat(request: ChatRequest):
             "risk_level": risk_level,
             "bot_reply": safety_reply,
             "history_count": len(chat_history),
-            "memory_status": memory_status
+            "memory_status": memory_status,
+            "saved_memory": memory if memory_status in ("saved", "already_exists") else None
         }
 
     saved_memories = get_memories()
@@ -76,7 +80,8 @@ def chat(request: ChatRequest):
         "risk_level": risk_level,
         "bot_reply": bot_reply,
         "history_count": len(chat_history),
-        "memory_status": memory_status
+        "memory_status": memory_status,
+        "saved_memory": memory if memory_status in ("saved", "already_exists") else None
     }
 
 
@@ -130,6 +135,23 @@ def view_memory():
             for row in memories
         ]
     }
+
+
+@router.delete("/memory/{memory_id}")
+def remove_memory(memory_id: int):
+    success = delete_memory(memory_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"message": "Memory deleted successfully", "id": memory_id}
+
+
+@router.put("/memory/{memory_id}")
+def modify_memory(memory_id: int, request: MemoryRequest):
+    new_text = request.memory.strip()
+    success = update_memory(memory_id, new_text)
+    if not success:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"message": "Memory updated successfully", "id": memory_id, "memory": new_text}
 
 
 @router.get("/db-history")

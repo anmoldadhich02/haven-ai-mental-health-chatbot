@@ -346,6 +346,58 @@ html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--text);
 };
 
 /* ═══════════════════════════════════════════════
+   MEMORY EXTRACTION HELPER
+═══════════════════════════════════════════════ */
+function extractClientMemory(message) {
+  if (!message) return null;
+  const raw = message.trim();
+  const text = raw.toLowerCase();
+
+  const explicitPatterns = [
+    /^(?:please\s+)?remember\s+(?:that\s+|this\s*:\s*|this\s+)?(.+)$/i,
+    /^(?:can\s+you\s+)?(?:please\s+)?remember\s+(?:that\s+)?(.+)$/i,
+    /^(?:don'?t|do\s+not)\s+forget\s+(?:that\s+)?(.+)$/i,
+    /^(?:keep\s+in\s+mind\s+(?:that\s+)?)(.+)$/i,
+    /^(?:note\s+(?:down\s+|that\s+)?)(.+)$/i,
+    /^(?:always\s+remember\s+(?:that\s+)?)(.+)$/i,
+    /^(?:my\s+name\s+is\s+)(.+)$/i,
+    /^(?:i\s+(?:am|'m)\s+stressed\s+about\s+)(.+)$/i,
+    /^(?:i\s+feel\s+stressed\s+about\s+)(.+)$/i,
+    /^(?:i\s+(?:am|'m)\s+struggling\s+with\s+)(.+)$/i,
+    /^(?:i\s+(?:am|'m)\s+working\s+on\s+)(.+)$/i,
+    /^(?:i\s+prefer\s+)(.+)$/i,
+  ];
+
+  for (const p of explicitPatterns) {
+    const m = raw.match(p);
+    if (m && m[1]) {
+      const extracted = m[1].trim().replace(/[.!?,]+$/, "");
+      if (extracted.length >= 2) {
+        if (/my\s+name\s+is/i.test(text)) return `My name is ${extracted}`;
+        if (/stressed\s+about/i.test(text)) return `Stressed about: ${extracted}`;
+        if (/struggling\s+with/i.test(text)) return `Struggling with: ${extracted}`;
+        return extracted;
+      }
+    }
+  }
+
+  const triggers = [
+    "remember that", "remember this", "please remember", "remember:",
+    "remember ", "my name is", "i am stressed about", "i feel stressed about",
+    "i struggle with", "i prefer"
+  ];
+  for (const t of triggers) {
+    if (text.includes(t)) {
+      const idx = text.indexOf(t);
+      const extracted = raw.slice(idx + t.length).trim().replace(/^:\s*/, "").replace(/[.!?,]+$/, "");
+      if (extracted.length >= 2) return extracted;
+      return raw;
+    }
+  }
+  return null;
+}
+
+/* ═══════════════════════════════════════════════
    STORE
 ═══════════════════════════════════════════════ */
 const useStore = create((set, get) => ({
@@ -522,23 +574,67 @@ const useStore = create((set, get) => ({
   }),
 
   addMemory: (text) => {
-    const item = { id: crypto.randomUUID(), text, timestamp: new Date() };
+    if (!text || !text.trim()) return;
+    const clean = text.trim();
+    const item = { id: crypto.randomUUID(), text: clean, timestamp: new Date() };
     set((s) => {
-      const updated = [item, ...s.memories].slice(0, 30);
+      if (s.memories.some(m => m.text.toLowerCase().trim() === clean.toLowerCase())) {
+        return s;
+      }
+      const updated = [item, ...s.memories].slice(0, 50);
       try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
       return { memories: updated };
     });
+    // Sync to backend DB
+    api.post("/chat/memory", { memory: clean }).catch(() => {});
   },
-  editMemory: (id, text) => set((s) => {
-    const updated = s.memories.map(m => m.id === id ? { ...m, text } : m);
-    try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
-    return { memories: updated };
-  }),
-  removeMemory: (id) => set((s) => {
-    const updated = s.memories.filter(m => m.id !== id);
-    try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
-    return { memories: updated };
-  }),
+  editMemory: (id, text) => {
+    if (!text || !text.trim()) return;
+    const clean = text.trim();
+    set((s) => {
+      const updated = s.memories.map(m => m.id === id ? { ...m, text: clean } : m);
+      try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
+      return { memories: updated };
+    });
+    if (typeof id === "number" || (!isNaN(Number(id)) && String(id).length < 10)) {
+      api.put(`/chat/memory/${id}`, { memory: clean }).catch(() => {});
+    }
+  },
+  removeMemory: (id) => {
+    set((s) => {
+      const updated = s.memories.filter(m => m.id !== id);
+      try { localStorage.setItem("haven-memories", JSON.stringify(updated)); } catch {}
+      return { memories: updated };
+    });
+    if (typeof id === "number" || (!isNaN(Number(id)) && String(id).length < 10)) {
+      api.delete(`/chat/memory/${id}`).catch(() => {});
+    }
+  },
+  syncMemories: async () => {
+    try {
+      const res = await api.get("/chat/memory");
+      if (res.data && Array.isArray(res.data.memories)) {
+        const backendItems = res.data.memories.map(m => ({
+          id: m.id,
+          text: m.memory,
+          timestamp: m.created_at ? new Date(m.created_at) : new Date(),
+        }));
+        set((s) => {
+          const map = new Map();
+          // Backend memories first
+          backendItems.forEach(b => map.set(b.text.toLowerCase().trim(), b));
+          // Local memories next
+          (s.memories || []).forEach(l => {
+            const key = l.text.toLowerCase().trim();
+            if (!map.has(key)) map.set(key, l);
+          });
+          const merged = Array.from(map.values());
+          try { localStorage.setItem("haven-memories", JSON.stringify(merged)); } catch {}
+          return { memories: merged };
+        });
+      }
+    } catch {}
+  },
   deleteSession: (id) => {
     set((s) => {
       const history = s.history.filter(i => i.id !== id);
@@ -671,7 +767,20 @@ const useStore = create((set, get) => ({
       const saved = localStorage.getItem("haven-saved");
       if (saved) set({ savedAdvice: JSON.parse(saved) });
       const mems = localStorage.getItem("haven-memories");
-      if (mems) set({ memories: JSON.parse(mems) });
+      if (mems) {
+        try {
+          const parsedMems = JSON.parse(mems);
+          if (Array.isArray(parsedMems)) {
+            set({
+              memories: parsedMems.map(m => ({
+                ...m,
+                timestamp: m.timestamp ? new Date(m.timestamp) : new Date()
+              }))
+            });
+          }
+        } catch {}
+      }
+      get().syncMemories();
       const tone = localStorage.getItem("haven-tone");
       if (tone) set({ preferredTone: tone });
       const checkins = localStorage.getItem("haven-checkins");
@@ -1882,10 +1991,19 @@ function JournalDrawer({ onClose }) {
 /* ═══════════════════════════════════════════════
    MEMORY PANEL
 ═══════════════════════════════════════════════ */
-function MemoryPanel({ memories, savedAdvice, onClose, onEditMemory, onDeleteMemory, onDeleteSaved }) {
+function MemoryPanel({ memories, savedAdvice, onClose, onAddMemory, onEditMemory, onDeleteMemory, onDeleteSaved }) {
   const [tab, setTab] = useState("memories");
   const [editId, setEditId] = useState(null);
   const [editVal, setEditVal] = useState("");
+  const [newMemText, setNewMemText] = useState("");
+
+  const handleAdd = () => {
+    const val = newMemText.trim();
+    if (val) {
+      onAddMemory(val);
+      setNewMemText("");
+    }
+  };
 
   return (
     <motion.div className="panel-overlay" initial={{ x: 360 }} animate={{ x: 0 }} exit={{ x: 360 }} transition={{ type: "spring", damping: 24 }}>
@@ -1905,8 +2023,58 @@ function MemoryPanel({ memories, savedAdvice, onClose, onEditMemory, onDeleteMem
       </div>
       <div className="panel-scroll" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
         {tab === "memories" && (
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                placeholder="Add a new memory (e.g. Exam on Friday)..."
+                value={newMemText}
+                onChange={e => setNewMemText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); }}
+                style={{
+                  flex: 1,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  padding: "9px 12px",
+                  fontSize: 12,
+                  color: "var(--text)",
+                  fontFamily: "inherit",
+                  outline: "none"
+                }}
+              />
+              <button
+                onClick={handleAdd}
+                className="hover-lift"
+                style={{
+                  padding: "9px 14px",
+                  borderRadius: 10,
+                  background: "rgba(90,138,110,0.22)",
+                  border: "1px solid rgba(90,138,110,0.38)",
+                  color: "var(--text)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  whiteSpace: "nowrap"
+                }}>
+                Add
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: "var(--muted-2)", marginTop: 6, paddingLeft: 2 }}>
+              💡 Or say <em>"Remember that..."</em> in chat and Haven will save it automatically.
+            </div>
+          </div>
+        )}
+
+        {tab === "memories" && (
           memories.length === 0
-            ? <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 13 }}>No memories saved yet.<br /><span style={{ fontSize: 11, opacity: 0.7 }}>Haven will remember key insights from your conversations.</span></div>
+            ? <div style={{ textAlign: "center", padding: "36px 16px", color: "var(--muted)", fontSize: 13, background: "rgba(255,255,255,0.015)", borderRadius: 14, border: "1px dashed var(--border)" }}>
+                No memories saved yet.<br />
+                <span style={{ fontSize: 11, opacity: 0.75, display: "block", marginTop: 4 }}>
+                  Ask Haven in chat: <em>"Remember that I like quiet mornings"</em> or type above!
+                </span>
+              </div>
             : memories.map(m => (
               <div key={m.id} className="memory-card">
                 {editId === m.id ? (
@@ -2304,7 +2472,7 @@ export default function App() {
     clearConversation, saveSession, hydrate,
     persistName, persistStreak, persistMoodLog, persistTone,
     userName, preferredTone, intention, showIntention, setIntention, setShowIntention,
-    saveAdvice, removeSaved, savedAdvice, memories, addMemory, editMemory, removeMemory,
+    saveAdvice, removeSaved, savedAdvice, memories, addMemory, editMemory, removeMemory, syncMemories,
     selectedMood, setCheckinData, checkinData, checkinHistory, setSessionReflection, sessionReflection,
     streak, moodLog, totalCheckins, activePanel, setActivePanel,
   } = useStore();
@@ -2338,10 +2506,12 @@ export default function App() {
       const reply = data.bot_reply ?? "I'm here with you.";
       addMessage({ id: crypto.randomUUID(), role: "haven", content: reply, timestamp: new Date() });
       persistMoodLog();
-      // Auto-save memory if notable
-      if (reply.length > 80 && Math.random() < 0.15) {
-        const snippet = reply.split(".")[0].trim();
-        if (snippet.length > 20) addMemory(snippet);
+
+      // Sync memory if backend detected and saved one
+      if (data?.saved_memory) {
+        addMemory(data.saved_memory);
+      } else if (data?.memory_status === "saved") {
+        syncMemories();
       }
     },
     onError: () => {
@@ -2353,6 +2523,13 @@ export default function App() {
   const sendMessage = () => {
     const text = input.trim();
     if (!text || mutation.isPending) return;
+
+    // Detect if user asks Haven to remember something and save it right away
+    const clientMem = extractClientMemory(text);
+    if (clientMem) {
+      addMemory(clientMem);
+    }
+
     addMessage({ id: crypto.randomUUID(), role: "user", content: text, timestamp: new Date() });
     setInput("");
     setTyping(true);
@@ -2423,6 +2600,7 @@ export default function App() {
         {activePanel === "memories" && (
           <MemoryPanel key="memories" memories={memories} savedAdvice={savedAdvice}
             onClose={() => setActivePanel(null)}
+            onAddMemory={addMemory}
             onEditMemory={editMemory} onDeleteMemory={removeMemory} onDeleteSaved={removeSaved} />
         )}
         {activePanel === "settings" && (

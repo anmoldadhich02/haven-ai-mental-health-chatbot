@@ -163,6 +163,23 @@ def delete_memory(memory_id):
     return deleted > 0
 
 
+def update_memory(memory_id, new_memory):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE memories SET memory = ? WHERE id = ?",
+        (new_memory.strip(), memory_id)
+    )
+
+    updated = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return updated > 0
+
+
 # =========================
 # MOOD FUNCTIONS
 # =========================
