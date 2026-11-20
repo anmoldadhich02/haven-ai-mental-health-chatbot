@@ -398,6 +398,106 @@ function extractClientMemory(message) {
 }
 
 /* ═══════════════════════════════════════════════
+   CRISP SESSION TITLE GENERATOR
+═══════════════════════════════════════════════ */
+function generateCrispTitle(rawText) {
+  if (!rawText || !rawText.trim()) return "New chat";
+  const raw = rawText.trim();
+  const text = raw.toLowerCase();
+
+  // 1. Topic keyword mapping (crisp 1-3 word titles)
+  if (/anxious|anxiety|panic|terrified|scared|nervous|dread|freaking/i.test(text)) {
+    if (/exam|test|study|college|school/i.test(text)) return "Exam Anxiety";
+    if (/social|people|crowd|public/i.test(text)) return "Social Anxiety";
+    if (/work|job|boss|meeting/i.test(text)) return "Work Anxiety";
+    if (/health|sick|body/i.test(text)) return "Health Anxiety";
+    return "Anxiety Support";
+  }
+
+  if (/mood\s*swing|swings|moody/i.test(text)) {
+    return "Mood Swings";
+  }
+
+  if (/good|better|happy|peaceful|calm|great|grateful|proud|joy/i.test(text)) {
+    if (/bit\s+good|feeling\s+good/i.test(text)) return "Feeling Good";
+    if (/better/i.test(text)) return "Feeling Better";
+    if (/calm|peace/i.test(text)) return "Calm Moments";
+    return "Positive Mood";
+  }
+
+  if (/depress|sad|crying|hopeless|empty|numb|heartbreak|grief|lost/i.test(text)) {
+    return "Low Mood Support";
+  }
+
+  if (/stress|overwhelm|pressure|burnout|exhaust|too much/i.test(text)) {
+    if (/work|job|boss|career/i.test(text)) return "Work Stress";
+    if (/exam|study|college|school/i.test(text)) return "Academic Stress";
+    return "Stress Relief";
+  }
+
+  if (/mood/i.test(text)) {
+    return "Mood Check-in";
+  }
+
+  if (/sleep|insomnia|awake|can't sleep|nightmare|restless|bedtime/i.test(text)) {
+    return "Sleep & Rest";
+  }
+
+  if (/lonely|alone|isolated|nobody|no one/i.test(text)) {
+    return "Feeling Lonely";
+  }
+
+  if (/relationship|partner|boyfriend|girlfriend|breakup|divorce|husband|wife|dating/i.test(text)) {
+    if (/breakup|divorce|broke up/i.test(text)) return "Breakup Support";
+    return "Relationship Support";
+  }
+
+  if (/family|parents|mom|dad|sister|brother|mother|father/i.test(text)) {
+    return "Family Thoughts";
+  }
+
+  if (/friend|friends|friendship/i.test(text)) {
+    return "Friendship Support";
+  }
+
+  if (/overthink|racing\s+thought|spiral|can't stop thinking/i.test(text)) {
+    return "Overthinking";
+  }
+
+  if (/breath|grounding|relax|meditat/i.test(text)) {
+    return "Calm & Grounding";
+  }
+
+  if (/procrastinat|lazy|focus|motivation|stuck/i.test(text)) {
+    return "Focus & Motivation";
+  }
+
+  if (/vent|rant|just need to talk|listen to me/i.test(text)) {
+    return "Venting Space";
+  }
+
+  // 2. Strip conversational fillers, greetings, and leading verbs
+  let cleaned = raw
+    .replace(/^(?:well|hey|hi|hello|um|uh|so|actually|basically|tbh|to be honest|please)[,\s]+/i, "")
+    .replace(/^(?:i feel like|i feel a bit|i feel|i am feeling|i'm feeling|i'm having a lot of|i have a lot of|i'm having|i am having|i've been having|i've been|i had|i have|i think|i am|i'm)[,\s]+/i, "")
+    .replace(/^(?:can you help me with|help me with|can we talk about|i want to talk about|tell me about|what should i do about|how to deal with|how do i deal with)[,\s]+/i, "")
+    .replace(/[.!?,\-_:;…]+$/, "")
+    .trim();
+
+  if (!cleaned) return "Daily Reflection";
+
+  // 3. Keep 2 to 3 meaningful words and capitalize in Title Case
+  const words = cleaned.split(/\s+/).filter(w => w.length > 0).slice(0, 3);
+  if (words.length === 0) return "Daily Reflection";
+
+  const titleCased = words
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+
+  return titleCased.slice(0, 22).trim();
+}
+
+/* ═══════════════════════════════════════════════
    STORE
 ═══════════════════════════════════════════════ */
 const useStore = create((set, get) => ({
@@ -508,18 +608,17 @@ const useStore = create((set, get) => ({
       // Ensure this session is visible in history immediately upon sending
       let history = [...s.history];
       const existingIdx = history.findIndex(h => h.id === sid);
-      const cleanSnippet = (m.content || "").replace(/^[#*\s]+/, "").slice(0, 32).trim();
-      const autoTitle = cleanSnippet || "New chat";
+      const crispTitle = generateCrispTitle(m.content);
 
       if (existingIdx >= 0) {
-        if (history[existingIdx].title === "New chat" && cleanSnippet) {
-          history[existingIdx] = { ...history[existingIdx], title: autoTitle };
+        if ((history[existingIdx].title === "New chat" || history[existingIdx].title.length > 20) && crispTitle) {
+          history[existingIdx] = { ...history[existingIdx], title: crispTitle };
         }
       } else {
         const today = new Date();
         const entry = {
           id: sid,
-          title: autoTitle,
+          title: crispTitle,
           date: today.toISOString(),
           category: "Today",
         };
@@ -676,6 +775,7 @@ const useStore = create((set, get) => ({
     const category = dateStr === isYesterday ? "Yesterday" : "Today";
     const { currentSessionId, messages, sessions, history } = get();
     const sid = currentSessionId || crypto.randomUUID();
+    const crispTitle = generateCrispTitle(title);
     // Persist full messages for this session keyed by id
     const updatedSessions = { ...sessions, [sid]: messages };
     try { localStorage.setItem("haven-sessions", JSON.stringify(updatedSessions)); } catch {}
@@ -684,11 +784,11 @@ const useStore = create((set, get) => ({
     let updatedHistory;
     if (existingIndex >= 0) {
       updatedHistory = [...history];
-      if (title && title !== "Support session" && title !== "New chat") {
-        updatedHistory[existingIndex] = { ...updatedHistory[existingIndex], title };
+      if (crispTitle && crispTitle !== "Support session" && crispTitle !== "New chat") {
+        updatedHistory[existingIndex] = { ...updatedHistory[existingIndex], title: crispTitle };
       }
     } else {
-      const entry = { id: sid, title: title || "New chat", date: today.toISOString(), category };
+      const entry = { id: sid, title: crispTitle || "New chat", date: today.toISOString(), category };
       updatedHistory = [entry, ...history].slice(0, 30);
     }
 
@@ -706,8 +806,13 @@ const useStore = create((set, get) => ({
       if (h) {
         const p = JSON.parse(h);
         if (Array.isArray(p)) {
-          history = p;
+          // Automatically upgrade any legacy or sentence-length titles to crisp 1-3 word titles
+          history = p.map(item => ({
+            ...item,
+            title: generateCrispTitle(item.title)
+          }));
           set({ history });
+          try { localStorage.setItem("haven-history", JSON.stringify(history)); } catch {}
         }
       }
 
@@ -831,7 +936,7 @@ const useStore = create((set, get) => ({
 /* ═══════════════════════════════════════════════
    API
 ═══════════════════════════════════════════════ */
-const fetchReply = (msg) => api.post("/chat/", { message: msg }).then(r => r.data);
+const fetchReply = (msg, history = []) => api.post("/chat/", { message: msg, history }).then(r => r.data);
 
 /* ═══════════════════════════════════════════════
    UTILS
@@ -2500,7 +2605,7 @@ export default function App() {
   }, []);
 
   const mutation = useMutation({
-    mutationFn: ({ msg }) => fetchReply(msg),
+    mutationFn: ({ msg, history }) => fetchReply(msg, history),
     onSuccess: (data) => {
       setTyping(false);
       const reply = data.bot_reply ?? "I'm here with you.";
@@ -2530,10 +2635,16 @@ export default function App() {
       addMemory(clientMem);
     }
 
+    // Capture recent history for this specific conversation to avoid repetitive AI answers
+    const recentHistory = messages.slice(-6).map(m => ({
+      role: m.role,
+      content: m.content
+    }));
+
     addMessage({ id: crypto.randomUUID(), role: "user", content: text, timestamp: new Date() });
     setInput("");
     setTyping(true);
-    mutation.mutate({ msg: text });
+    mutation.mutate({ msg: text, history: recentHistory });
   };
 
   const handleNameDone = (name) => {

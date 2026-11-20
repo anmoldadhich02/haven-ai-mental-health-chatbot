@@ -14,7 +14,8 @@ chat_history = []
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=1000)
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: list = Field(default=[])
 
 
 class MemoryRequest(BaseModel):
@@ -36,6 +37,8 @@ def chat(request: ChatRequest):
     if memory:
         saved = save_memory(memory)
         memory_status = "saved" if saved else "already_exists"
+
+    session_history = request.history if request.history else chat_history
 
     if risk_level == "high":
         safety_reply = (
@@ -65,7 +68,7 @@ def chat(request: ChatRequest):
     saved_memories = get_memories()
     memory_texts = [row[1] for row in saved_memories]
 
-    bot_reply = generate_response(user_message, chat_history, memory_texts)
+    bot_reply = generate_response(user_message, session_history, memory_texts)
 
     save_chat(user_message, bot_reply, risk_level)
 
