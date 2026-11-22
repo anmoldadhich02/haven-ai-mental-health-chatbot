@@ -484,7 +484,7 @@ function generateCrispTitle(rawText) {
     .replace(/[.!?,\-_:;…]+$/, "")
     .trim();
 
-  if (!cleaned) return "Daily Reflection";
+  if (!cleaned) return generateCrispTitle(cleaned);
 
   // 3. Keep 2 to 3 meaningful words and capitalize in Title Case
   const words = cleaned.split(/\s+/).filter(w => w.length > 0).slice(0, 3);

@@ -67,7 +67,7 @@ def get_max_tokens(user_message: str) -> int:
         return 500
 
     # Concise, bite-sized, and reader-friendly
-    return 400
+    return 300
 
 # ─────────────────────────────────────────
 def generate_response(user_message: str, chat_history: list = None, memories: list = None) -> str:
